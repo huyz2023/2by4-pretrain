@@ -29,7 +29,7 @@ pip install -e .
 
 To get started with 2:4-spMM, official [torch.sparse](https://pytorch.org/docs/2.1/sparse.html#sparse-semi-structured-tensors) works well enough. However, we've added more features on top of that.
 
-**Constructing 2:4 tensor **
+**Constructing 2:4 tensor**
 
 To construct a sparse semi-structured tensor, simply calling `sparse.to_sparse_semi_structured` would work:
 
@@ -84,7 +84,7 @@ There are two 2:4-spMM kernels in total. CUTLASS and cuSPARSElt. The cuSPARSElt 
 sparse.SparseSemiStructuredTensor._FORCE_CUTLASS = False
 ```
 
-By default, this is always True.
+By default, CUTLASS backend is used. Different from PyTorch, we support float8 2:4-spMM via CUTLASS (for RTX 4090 and higher GPUs).
 
 **Transposable mask select**
 
