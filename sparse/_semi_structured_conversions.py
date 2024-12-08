@@ -357,6 +357,7 @@ def get_configs():
         for num_stages in [1, 2, 3, 4, 5, 6, 7]:
             for num_warps in [1, 2, 4, 8, 16]:
                 configs.append(triton.Config({'BLOCK_SIZE': block}, num_stages=num_stages, num_warps=num_warps))
+
     return configs
 
 

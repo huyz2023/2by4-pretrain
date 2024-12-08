@@ -5,8 +5,6 @@ import torch
 import triton
 import triton.language as tl
 
-from ._semi_structured_conversions import get_configs, _MVUE24_approx
-
 
 def sparse12(weight):
     N, M = 1, 2
@@ -24,18 +22,41 @@ def sparse12(weight):
     return output * w_b, w_b
 
 
-def sparse24(weight):
+@torch.no_grad()
+def sparse24_torch(weight):
+    N, M = 2, 4
+
+    length = weight.numel()
+    group = int(length / M)
+
+    weight_temp = weight.abs().reshape(group, M)
+    index = torch.argsort(weight_temp, dim=1)[:, :int(M - N)]
+
+    w_b = torch.ones(weight_temp.shape, device=weight_temp.device, dtype=torch.int)
+    w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
+
+    return weight * w_b, w_b
+
+
+def rand24(weight):
+    mask_pattern = torch.tensor(
+        [[1, 1, 0, 0],
+         [1, 0, 1, 0],
+         [1, 0, 0, 1],
+         [0, 1, 1, 0],
+         [0, 1, 0, 1],
+         [0, 0, 1, 1]],
+        dtype=torch.bool,
+        device=weight.device
+    )
     N, M = 2, 4
 
     output = weight.clone()
     length = weight.numel()
     group = int(length / M)
 
-    weight_temp = weight.detach().abs().reshape(group, M)
-    index = torch.argsort(weight_temp, dim=1)[:, :int(M - N)]
-
-    w_b = torch.ones(weight_temp.shape, device=weight_temp.device, dtype=torch.int)
-    w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
+    index = torch.randint(0, len(mask_pattern), (group,), dtype=torch.long, device=weight.device)
+    w_b = torch.index_select(mask_pattern, 0, index).view(weight.shape)
 
     return output * w_b, w_b
 
@@ -70,6 +91,48 @@ def sparse48(weight):
     w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
 
     return output * w_b, w_b
+
+@torch.no_grad()
+def soft_threshold24_torch(weight):
+    N, M = 2, 4
+
+    sign = torch.sign(weight)
+    length = weight.numel()
+    group = int(length / M)
+
+    weight_temp = weight.detach().abs().reshape(group, M)
+    index = torch.argsort(weight_temp, dim=1)[:, :int(M - N)]
+    t1 = torch.argsort(weight_temp, dim=1)[:, N - 1].unsqueeze_(1)
+
+    w_b = torch.ones(weight_temp.shape, device=weight_temp.device, dtype=torch.int)
+    w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
+
+    k1 = torch.gather(weight_temp, dim=1, index=t1)
+    k = k1
+    weight_temp = (weight_temp - k).reshape(weight.shape)
+
+    return sign * weight_temp * w_b, w_b
+
+
+def soft_threshold12(weight):
+    N, M = 1, 2
+
+    sign = torch.sign(weight)
+    length = weight.numel()
+    group = int(length / M)
+
+    weight_temp = weight.detach().abs().reshape(group, M)
+    index = torch.argsort(weight_temp, dim=1)[:, :int(M - N)]
+    t1 = torch.argsort(weight_temp, dim=1)[:, N - 1].unsqueeze_(1)
+
+    w_b = torch.ones(weight_temp.shape, device=weight_temp.device, dtype=torch.int)
+    w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
+
+    k1 = torch.gather(weight_temp, dim=1, index=t1)
+    k = k1
+    weight_temp = (weight_temp - k).reshape(weight.shape)
+
+    return sign * weight_temp * w_b, w_b
 
 
 def MVUE12(weight):
@@ -161,7 +224,7 @@ def MVUE24(weight):
     return weight
 
 
-def MVUE24_approx(weight):
+def MVUE24_approx_torch(weight):
     eps = 1.19209e-07
     device = weight.device
     shape = weight.shape
@@ -203,83 +266,6 @@ def MVUE24_approx(weight):
     weight = weight * sign
     weight = weight.view(shape)
     return weight
-
-
-@triton.autotune(
-    configs=get_configs(),
-    key=['m', 'k'],
-)
-@triton.jit
-def _MVUE24_approx_triton(
-        dense_ptr,
-        sparse_ptr,
-        dense_row_stride,
-        sparse_row_stride,
-        dense_col_stride,
-        sparse_col_stride,
-        m, k,
-        seed,
-        BLOCK_SIZE: tl.constexpr,
-        ARRAY_LAYOUT: tl.constexpr
-):
-    if ARRAY_LAYOUT == 'row':
-        row_idx = tl.program_id(0)
-        col_idx = tl.program_id(1) * 4 * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) * 4
-        mask = col_idx < k
-    elif ARRAY_LAYOUT == 'col':
-        row_idx = tl.arange(0, BLOCK_SIZE) + tl.program_id(0) * BLOCK_SIZE
-        col_idx = tl.program_id(1) * 4
-        mask = row_idx < m
-    dense_40 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 0) * dense_col_stride, mask=mask)
-    dense_41 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 1) * dense_col_stride, mask=mask)
-    dense_42 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 2) * dense_col_stride, mask=mask)
-    dense_43 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 3) * dense_col_stride, mask=mask)
-
-    if ARRAY_LAYOUT == 'row':
-        seed0 = seed + (tl.program_id(0) + tl.program_id(1) * m) * 2
-        seed1 = seed + (tl.program_id(0) + tl.program_id(1) * m) * 2 + 1
-    else:
-        seed0 = seed + (tl.program_id(0) * k // 16 + tl.program_id(1)) * 2
-        seed1 = seed + (tl.program_id(0) * k // 16 + tl.program_id(1)) * 2 + 1
-
-    random0 = tl.rand(seed0, tl.arange(0, BLOCK_SIZE), n_rounds=5)
-    random1 = tl.rand(seed1, tl.arange(0, BLOCK_SIZE), n_rounds=5)
-
-    dense_40, dense_41, dense_42, dense_43, m0, m1, m2, m3 = _MVUE24_approx(dense_40, dense_41, dense_42, dense_43,
-                                                                            random0, random1)
-
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 0) * sparse_col_stride, dense_40, mask=mask & m0)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 1) * sparse_col_stride, dense_41, mask=mask & m1)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 2) * sparse_col_stride, dense_42, mask=mask & m2)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 3) * sparse_col_stride, dense_43, mask=mask & m3)
-
-
-def MVUE24_approx_triton(dense):
-    m, k = dense.shape
-    device = dense.device
-    seed = random.randint(0, 2 ** 31 - 1)
-    sparse = torch.zeros_like(dense)
-
-    row_stride, col_stride = dense.stride()
-    if row_stride > col_stride:
-        array_layout = 'row'
-        grid = lambda META: (m, triton.cdiv(k, 4 * META['BLOCK_SIZE']))
-    else:
-        array_layout = 'col'
-        grid = lambda META: (triton.cdiv(m, META['BLOCK_SIZE']), k // 4,)
-    func = _MVUE24_approx_triton
-    func[grid](
-        dense,
-        sparse,
-        dense.stride(0),
-        sparse.stride(0),
-        dense.stride(1),
-        sparse.stride(1),
-        m, k,
-        seed,
-        ARRAY_LAYOUT=array_layout
-    )
-    return sparse
 
 
 def transposable_sparse(weight, abs=True):
@@ -366,98 +352,3 @@ def transposable_sparse(weight, abs=True):
     w_b = i
 
     return output * w_b, w_b
-
-
-def get_sparse24_configs():
-    configs = []
-    for block in [32, 64, 128, 256]:
-        for num_stages in [3, 4, 5]:
-            for num_warps in [2, 4, 8]:
-                configs.append(triton.Config({'BLOCK_SIZE': block}, num_stages=num_stages, num_warps=num_warps))
-    return configs
-
-
-@triton.jit
-def _sparse24(a0, a1, a2, a3):
-    (x1, x2, x3,
-     x4, x5, x6) = (tl.abs(a0) > tl.abs(a1), tl.abs(a0) > tl.abs(a2), tl.abs(a0) > tl.abs(a3),
-                    tl.abs(a1) > tl.abs(a2), tl.abs(a1) > tl.abs(a3), tl.abs(a2) > tl.abs(a3))
-    m0, m1, m2, m3 = x2 & x3 | x1 & x2 | x1 & x3, ~x1 & x5 | x4 & x5 | ~x1 & x4, ~x2 & ~x4 | ~x2 & x6 | ~x4 & x6, ~x3 & ~x5 | ~x3 & ~x6 | ~x5 & ~x6
-
-    return a0, a1, a2, a3, m0, m1, m2, m3
-
-
-@triton.autotune(
-    configs=get_sparse24_configs(),
-    key=['m', 'k'],
-)
-@triton.jit
-def _sparse24_triton(
-        dense_ptr,
-        sparse_ptr,
-        mask_ptr,
-        dense_row_stride,
-        sparse_row_stride,
-        mask_row_stride,
-        dense_col_stride,
-        sparse_col_stride,
-        mask_col_stride,
-        m, k,
-        BLOCK_SIZE: tl.constexpr,
-        ARRAY_LAYOUT: tl.constexpr
-):
-    if ARRAY_LAYOUT == 'row':
-        row_idx = tl.program_id(0)
-        col_idx = tl.program_id(1) * 4 * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE) * 4
-        mask = col_idx < k
-    elif ARRAY_LAYOUT == 'col':
-        row_idx = tl.arange(0, BLOCK_SIZE) + tl.program_id(0) * BLOCK_SIZE
-        col_idx = tl.program_id(1) * 4
-        mask = row_idx < m
-    dense_40 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 0) * dense_col_stride, mask=mask)
-    dense_41 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 1) * dense_col_stride, mask=mask)
-    dense_42 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 2) * dense_col_stride, mask=mask)
-    dense_43 = tl.load(dense_ptr + row_idx * dense_row_stride + (col_idx + 3) * dense_col_stride, mask=mask)
-
-    dense_40, dense_41, dense_42, dense_43, m0, m1, m2, m3 = _sparse24(dense_40, dense_41, dense_42, dense_43)
-
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 0) * sparse_col_stride, dense_40, mask=mask & m0)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 1) * sparse_col_stride, dense_41, mask=mask & m1)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 2) * sparse_col_stride, dense_42, mask=mask & m2)
-    tl.store(sparse_ptr + row_idx * sparse_row_stride + (col_idx + 3) * sparse_col_stride, dense_43, mask=mask & m3)
-
-    tl.store(mask_ptr + row_idx * mask_row_stride + (col_idx + 0) * mask_col_stride, m0, mask=mask & m0)
-    tl.store(mask_ptr + row_idx * mask_row_stride + (col_idx + 1) * mask_col_stride, m1, mask=mask & m1)
-    tl.store(mask_ptr + row_idx * mask_row_stride + (col_idx + 2) * mask_col_stride, m2, mask=mask & m2)
-    tl.store(mask_ptr + row_idx * mask_row_stride + (col_idx + 3) * mask_col_stride, m3, mask=mask & m3)
-
-
-def sparse24_triton(dense):
-    m, k = dense.shape
-    device = dense.device
-
-    sparse = torch.zeros_like(dense)
-    mask = torch.zeros_like(dense)
-
-    row_stride, col_stride = dense.stride()
-    if row_stride > col_stride:
-        array_layout = 'row'
-        grid = lambda META: (m, triton.cdiv(k, 4 * META['BLOCK_SIZE']))
-    else:
-        array_layout = 'col'
-        grid = lambda META: (triton.cdiv(m, META['BLOCK_SIZE']), k // 4,)
-    func = _sparse24_triton
-    func[grid](
-        dense,
-        sparse,
-        mask,
-        dense.stride(0),
-        sparse.stride(0),
-        mask.stride(0),
-        dense.stride(1),
-        sparse.stride(1),
-        mask.stride(1),
-        m, k,
-        ARRAY_LAYOUT=array_layout
-    )
-    return sparse, mask

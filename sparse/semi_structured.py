@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 import torch
 
-import sparse
+from .sparse_semi_structured_linear import sparse_semi_structured_linear
 
 __all__ = [
     "SparseSemiStructuredTensor",
@@ -242,7 +242,7 @@ class SparseSemiStructuredTensor(torch.Tensor):
                                                                                                               m * n // 2:].view(
                         indices_dtype).view(m, -1)
                 sparse_semi_structured_from_dense_triton(original_tensor, sparse_tensor_cutlass,
-                                                         meta_tensor_cutlass, fp8, MVUE24=MVUE24, mask=mask)
+                                                         meta_tensor_cutlass, MVUE24=MVUE24, mask=mask)
 
             else:
                 # # use cuSPARSELt
@@ -430,7 +430,7 @@ class SparseSemiStructuredTensor(torch.Tensor):
 
                 if input_B.compressed_tensor_cusparselt is None:
                     assert input_B.sparse_tensor_cutlass is not None and input_B.meta_tensor_cutlass is not None
-                    res = sparse._my_sparse_semi_structured_linear(
+                    res = sparse_semi_structured_linear(
                         input_A_padded,
                         input_B.sparse_tensor_cutlass,
                         input_B.meta_tensor_cutlass,
@@ -457,7 +457,7 @@ class SparseSemiStructuredTensor(torch.Tensor):
 
                 if input_A.compressed_tensor_cusparselt is None:
                     assert input_A.sparse_tensor_cutlass is not None and input_A.meta_tensor_cutlass is not None
-                    res = sparse._my_sparse_semi_structured_linear(
+                    res = sparse_semi_structured_linear(
                         input_B_padded.t(),
                         input_A.sparse_tensor_cutlass,
                         input_A.meta_tensor_cutlass
@@ -477,7 +477,7 @@ class SparseSemiStructuredTensor(torch.Tensor):
 
                 if input_B.compressed_tensor_cusparselt is None:
                     assert input_B.sparse_tensor_cutlass is not None and input_B.meta_tensor_cutlass is not None
-                    res = sparse._my_sparse_semi_structured_linear(
+                    res = sparse_semi_structured_linear(
                         input_A_padded,
                         input_B.sparse_tensor_cutlass,
                         input_B.meta_tensor_cutlass,
@@ -507,7 +507,7 @@ class SparseSemiStructuredTensor(torch.Tensor):
             if isinstance(weight, cls):
                 if weight.compressed_tensor_cusparselt is None:
                     assert weight.sparse_tensor_cutlass is not None and weight.meta_tensor_cutlass is not None
-                    res = sparse._my_sparse_semi_structured_linear(
+                    res = sparse_semi_structured_linear(
                         input_tensor_2d_padded,
                         weight.sparse_tensor_cutlass,
                         weight.meta_tensor_cutlass,
