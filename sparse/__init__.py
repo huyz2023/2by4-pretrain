@@ -5,6 +5,7 @@ from .matmul import matmul
 from .decay import masked_add_
 from .transposable_semi_structured import TransposableSparse
 from .semi_structured import to_sparse_semi_structured, SparseSemiStructuredTensor
+from .adamw_step import AdamW_STEP
 
 __all__ = [
     'MyLinear',
@@ -19,5 +20,6 @@ __all__ = [
     'masked_add_',
     'TransposableSparse',
     'to_sparse_semi_structured',
-    'SparseSemiStructuredTensor'
+    'SparseSemiStructuredTensor',
+    'AdamW_STEP'
 ]

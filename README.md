@@ -13,6 +13,8 @@ Yuezhou Hu, Jun Zhu, Jianfei Chen
 
 Neural Information Processing Systems (NeurIPS), 2024
 
+Meanwhile, we also provide our implementation for some relevant papers/algorithms: [STEP](https://openreview.net/forum?id=0O7b2Y198V).
+
 For scripts to replicate the experimental results, please visit [https://github.com/thu-ml/2by4-pretrain-acc-examples](https://github.com/thu-ml/2by4-pretrain-acc-examples).
 
 ## Installation
@@ -265,6 +267,66 @@ class SparseLinear(nn.Linear):
 ```
 
 The relevant code of this can be found at [https://github.com/thu-ml/2by4-pretrain-acc-examples](https://github.com/thu-ml/2by4-pretrain-acc-examples).
+
+### Other algorithms supported
+
+**STEP: Learning N:M Structured Sparsity Masks from Scratch with Precondition** [[PDF]](https://arxiv.org/abs/2302.01172)
+
+To replicate **STEP** in two steps:
+
+**Step 1**
+
+Replace `nn.Linear` with a STE-based 2:4 linear module:
+
+```
+import torch
+from torch import autograd, nn
+import torch.nn.functional as F
+
+import sparse
+
+
+class Sparse(autograd.Function):
+    @staticmethod
+    def forward(ctx, weight):
+        weight_sparse, _ = sparse.sparse24_triton(weight)
+        return weight_sparse
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+
+
+class STEPLinear(nn.Linear):
+
+    def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
+        super(STEPLinear, self).__init__(in_features, out_features, bias, device, dtype)
+        setattr(self.weight, 'mask', 'dense')
+
+    def forward(self, x):
+        if self.training and self.weight.mask == 'dense':
+            x = F.linear(x, self.weight, self.bias)
+        else:
+            w = Sparse.apply(self.weight)
+            x = F.linear(x, w, self.bias)
+        return x
+```
+
+**Step 2**
+
+Replace AdamW optimizer with STEP specific `sparse.AdamW_STEP `optimizer:
+
+```
+import sparse
+
+- adam = torch.optim.Adam(...)
++ adam = sparse.AdamW_STEP(...)
+```
+
+Some notes on extra arguments for `AdamW_STEP`:
+
+- `clipping`: a tuple for $T_{min}$ and $T_{max}$ in Algorithm 2, recommended to be 10% and 50% of total optimization steps.
+- `option`: different options to compute $Z_t$ in Algorithm 2, need to be `1` or `2`.
 
 ## Citation
 
